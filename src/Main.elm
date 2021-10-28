@@ -47,7 +47,7 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Linear 50.0 45.0 ]), Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Arc 50.0 30.0, Linear 40.0 30.0 ]), Cmd.none )
 
 
 
@@ -230,7 +230,7 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         , arcRadius
                         , "0"
                         , "0"
-                        , "0"
+                        , "1"
                         , Tuple.first v2
                         , Tuple.second v2
                         ]
@@ -244,8 +244,101 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         , fillOpacity "0.0"
                         ]
                         []
+
+                -- now do the edges
+                anglePlus =
+                    currentCourseDeg + 90
+
+                angleMinus =
+                    currentCourseDeg - 90
+
+                pointPlus =
+                    projectPoint currentXY anglePlus 25.0
+
+                pointMinus =
+                    projectPoint currentXY angleMinus 25.0
+
+                radiusPlus =
+                    lengthFeet - 25.0
+
+                radiusMinus =
+                    lengthFeet + 25.0
+
+                ( _, endpointPlusXY ) =
+                    computeArcPoints pointPlus currentCourseDeg angleChangeDeg radiusPlus
+
+                ( _, endpointMinusXY ) =
+                    computeArcPoints pointMinus currentCourseDeg angleChangeDeg radiusMinus
+
+                v1Plus =
+                    toViewCoords2 pointPlus model
+
+                v2Plus =
+                    toViewCoords2 endpointPlusXY model
+
+                v1Minus =
+                    toViewCoords2 pointMinus model
+
+                v2Minus =
+                    toViewCoords2 endpointMinusXY model
+
+                arcRadiusPlus =
+                    scaleToView model (lengthFeet - 25.0)
+
+                arcRadiusMinus =
+                    scaleToView model (lengthFeet + 25.0)
+
+                arcPathPlus =
+                    String.join " "
+                        [ "M"
+                        , Tuple.first v1Plus
+                        , Tuple.second v1Plus
+                        , "A"
+                        , arcRadiusPlus
+                        , arcRadiusPlus
+                        , "0"
+                        , "0"
+                        , "1"
+                        , Tuple.first v2Plus
+                        , Tuple.second v2Plus
+                        ]
+
+                arcPathMinus =
+                    String.join " "
+                        [ "M"
+                        , Tuple.first v1Minus
+                        , Tuple.second v1Minus
+                        , "A"
+                        , arcRadiusMinus
+                        , arcRadiusMinus
+                        , "0"
+                        , "0"
+                        , "1"
+                        , Tuple.first v2Minus
+                        , Tuple.second v2Minus
+                        ]
+
+                edgePlus =
+                    Svg.path
+                        [ d arcPathPlus
+                        , stroke "black"
+                        , fill "white"
+                        , strokeWidth "2"
+                        , fillOpacity "0.0"
+                        ]
+                        []
+
+                edgeMinus =
+                    Svg.path
+                        [ d arcPathMinus
+                        , stroke "black"
+                        , fill "white"
+                        , strokeWidth "2"
+                        , fillOpacity "0.0"
+                        ]
+                        []
             in
-            ( [ entity ], arcEndpointXY, currentCourseDeg + angleChangeDeg )
+            ( [ entity, edgePlus, edgeMinus ], arcEndpointXY, currentCourseDeg + angleChangeDeg )
 
 
 renderLine model upperLeftXY currentXY lengthFeet courseDeg colorStr =
