@@ -23,8 +23,20 @@ type alias Model =
     , viewHeightFeet : Float
     , viewWidthPixels : Int
     , viewHeightPixels : Int
-    , roadCenterline : List ( Float, Float )
+    , roadCenterline : RoadCenterline
     }
+
+
+type alias RoadCenterline =
+    { originXY : ( Float, Float )
+    , originCourseDeg : Float
+    , segments : List Segment -- List (Float, Float)
+    }
+
+
+type Segment
+    = Linear Float Float
+    | Arc Float Float
 
 
 type Msg
@@ -35,7 +47,12 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( Model 100.0 100.0 200.0 100.0 800 600 [ ( 100.0, 0.0 ), ( 100.0, 1000.0 ), ( 100.0, 2000.0 ) ], Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Linear 50.0 45.0 ]), Cmd.none )
+
+
+
+--Arc 50.0 -90.0 ]), Cmd.none )
+--[ ( 100.0, 0.0 ), ( 100.0, 1000.0 ), ( 100.0, 2000.0 ) ], Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -59,10 +76,10 @@ subscriptions model =
 view model =
     let
         pxWidth =
-            "800"
+            String.fromInt model.viewWidthPixels
 
         pxHeight =
-            "600"
+            String.fromInt model.viewHeightPixels
     in
     div []
         [ svg
@@ -98,37 +115,220 @@ renderRoad model =
         upperLeftY =
             model.viewCenterY + model.viewWidthFeet / 2.0
 
+        entities =
+            toSvg model ( upperLeftX, upperLeftY ) model.roadCenterline
+
         -- compute road coordinates relative to upper left corner
-        roadCoordsXY =
-            List.map (\p -> translate p ( upperLeftX, upperLeftY )) model.roadCenterline
-
+        --roadCoordsXY =
+        --    List.map (\p -> translate p ( upperLeftX, upperLeftY )) model.roadCenterline
         -- now project endpoints of each segment perpendicular to centerline based on road width
-        edge1CoordsXY =
-            projectEdges roadCoordsXY 90 25 []
-
-        edge2CoordsXY =
-            projectEdges roadCoordsXY -90 25 []
-
+        --edge1CoordsXY =
+        --    projectEdges roadCoordsXY 90 25 []
+        --edge2CoordsXY =
+        --    projectEdges roadCoordsXY -90 25 []
         -- now convert relative to view box
-        roadCoordsPixels =
-            List.map (\p -> toViewCoords p model) roadCoordsXY
-
-        edge1CoordsPixels =
-            List.map (\p -> toViewCoords p model) edge1CoordsXY
-
-        edge2CoordsPixels =
-            List.map (\p -> toViewCoords p model) edge2CoordsXY
-
-        centerLine =
-            toSvgLines roadCoordsPixels []
-
-        edge1 =
-            toSvgLines edge1CoordsPixels []
-
-        edge2 =
-            toSvgLines edge2CoordsPixels []
+        --roadCoordsPixels =
+        --    List.map (\p -> toViewCoords p model) roadCoordsXY
+        --
+        -- edge1CoordsPixels =
+        --     List.map (\p -> toViewCoords p model) edge1CoordsXY
+        --
+        -- edge2CoordsPixels =
+        --     List.map (\p -> toViewCoords p model) edge2CoordsXY
+        --
+        -- centerLine =
+        --     toSvgLines roadCoordsPixels []
+        --
+        -- edge1 =
+        --     toSvgLines edge1CoordsPixels []
+        --
+        -- edge2 =
+        --     toSvgLines edge2CoordsPixels []
     in
-    List.append edge2 (List.append centerLine edge1)
+    entities
+
+
+
+--    List.append edge2 (List.append centerLine edge1)
+
+
+toSvg model upperLeftXY roadCenterline =
+    renderSvg model upperLeftXY roadCenterline.originXY roadCenterline.originCourseDeg roadCenterline.segments []
+
+
+renderSvg model upperLeftXY currentXY currentCourseDeg segmentsRemaining resultsSoFar =
+    case segmentsRemaining of
+        [] ->
+            resultsSoFar
+
+        first :: rest ->
+            let
+                -- TODO:  remove upperLeftXY as arg (can compute inside toViewCoords)
+                ( entities, endXY, endCourseDeg ) =
+                    renderSegment model upperLeftXY currentXY currentCourseDeg first
+            in
+            renderSvg model upperLeftXY endXY endCourseDeg rest (List.append entities resultsSoFar)
+
+
+renderSegment model upperLeftXY currentXY currentCourseDeg segment =
+    case segment of
+        Linear lengthFeet courseDeg ->
+            let
+                ( center, nextXY ) =
+                    renderLine model upperLeftXY currentXY lengthFeet courseDeg "yellow"
+
+                -- in (X,Y) frame
+                edge1CoordsXY =
+                    projectEdge currentXY nextXY 90 25
+
+                edge2CoordsXY =
+                    projectEdge currentXY nextXY -90 25
+
+                edge1CoordsPixels =
+                    List.map (\p -> toViewCoords2 p model) edge1CoordsXY
+
+                edge2CoordsPixels =
+                    List.map (\p -> toViewCoords2 p model) edge2CoordsXY
+
+                edge1 =
+                    toSvgLinesWithColor edge1CoordsPixels [] "red"
+
+                edge2 =
+                    toSvgLinesWithColor edge2CoordsPixels [] "red"
+            in
+            --  ( [ center ], nextXY, courseDeg )
+            ( center :: List.append edge1 edge2, nextXY, courseDeg )
+
+        Arc lengthFeet angleChangeDeg ->
+            let
+                ( arcOriginXY, arcEndpointXY ) =
+                    computeArcPoints currentXY currentCourseDeg angleChangeDeg lengthFeet
+
+                -- turning right
+                p1 =
+                    translate currentXY upperLeftXY
+
+                p2 =
+                    translate arcEndpointXY upperLeftXY
+
+                v1 =
+                    toViewCoords p1 model
+
+                v2 =
+                    toViewCoords p2 model
+
+                arcRadius =
+                    scaleToView model lengthFeet
+
+                arcPath =
+                    String.join " "
+                        [ "M"
+                        , Tuple.first v1
+                        , Tuple.second v1
+                        , "A"
+                        , arcRadius
+                        , arcRadius
+                        , "0"
+                        , "0"
+                        , "0"
+                        , Tuple.first v2
+                        , Tuple.second v2
+                        ]
+
+                entity =
+                    Svg.path
+                        [ d arcPath
+                        , stroke "black"
+                        , fill "white"
+                        , strokeWidth "2"
+                        , fillOpacity "0.0"
+                        ]
+                        []
+            in
+            ( [ entity ], arcEndpointXY, currentCourseDeg + angleChangeDeg )
+
+
+renderLine model upperLeftXY currentXY lengthFeet courseDeg colorStr =
+    let
+        p1 =
+            translate currentXY upperLeftXY
+
+        dx =
+            lengthFeet * sin (degrees courseDeg)
+
+        dy =
+            lengthFeet * cos (degrees courseDeg)
+
+        p2 =
+            ( Tuple.first p1 + dx, Tuple.second p1 + dy )
+
+        nextXY =
+            ( Tuple.first currentXY + dx, Tuple.second currentXY + dy )
+
+        v1 =
+            toViewCoords p1 model
+
+        v2 =
+            toViewCoords p2 model
+
+        entity =
+            toSvgLineWithColor v1 v2 colorStr
+    in
+    ( entity, nextXY )
+
+
+scaleToView model distance =
+    String.fromFloat (toFloat model.viewWidthPixels * distance / model.viewWidthFeet)
+
+
+determineDirectionSign : Float -> Float
+determineDirectionSign angleChangeDeg =
+    if angleChangeDeg < 0 then
+        -1.0
+
+    else
+        1.0
+
+
+computeArcPoints xy courseDeg angleChangeDeg lengthFeet =
+    let
+        sign =
+            determineDirectionSign angleChangeDeg
+
+        dx =
+            lengthFeet * sin (degrees (courseDeg + sign * 90))
+
+        dy =
+            lengthFeet * cos (degrees (courseDeg + sign * 90))
+
+        originXY =
+            ( Tuple.first xy + dx, Tuple.second xy + dy )
+
+        -- compute course to the origin point
+        dx1 =
+            Tuple.first xy - Tuple.first originXY
+
+        dy1 =
+            Tuple.second xy - Tuple.second originXY
+
+        courseToInitialPointOnArc =
+            atan2 dx1 dy1
+
+        -- apply arc change
+        courseToFinalPointOnArc =
+            courseToInitialPointOnArc + degrees angleChangeDeg
+
+        -- find coord
+        dx2 =
+            lengthFeet * sin courseToFinalPointOnArc
+
+        dy2 =
+            lengthFeet * cos courseToFinalPointOnArc
+
+        endXY =
+            ( Tuple.first originXY + dx2, Tuple.second originXY + dy2 )
+    in
+    ( originXY, endXY )
 
 
 projectEdges centerLineCoordsXY courseDeg distanceFeet edgesSoFar =
@@ -224,6 +424,27 @@ toViewCoords pointXY model =
     ( String.fromFloat px, String.fromFloat -py )
 
 
+toViewCoords2 : ( Float, Float ) -> Model -> ( String, String )
+toViewCoords2 pointXY model =
+    let
+        upperLeftX =
+            model.viewCenterX - model.viewWidthFeet / 2.0
+
+        upperLeftY =
+            model.viewCenterY + model.viewWidthFeet / 2.0
+
+        relativeToUpperLeft =
+            translate pointXY ( upperLeftX, upperLeftY )
+
+        px =
+            Tuple.first relativeToUpperLeft / model.viewWidthFeet * toFloat model.viewWidthPixels
+
+        py =
+            Tuple.second relativeToUpperLeft / model.viewHeightFeet * toFloat model.viewHeightPixels
+    in
+    ( String.fromFloat px, String.fromFloat -py )
+
+
 toSvgLines pointsRemaining lines =
     case pointsRemaining of
         [] ->
@@ -238,6 +459,20 @@ toSvgLines pointsRemaining lines =
                     toSvgLines (List.drop 1 pointsRemaining) (toSvgLine p1 p2 :: lines)
 
 
+toSvgLinesWithColor pointsRemaining lines colorStr =
+    case pointsRemaining of
+        [] ->
+            lines
+
+        p1 :: rest ->
+            case rest of
+                [] ->
+                    lines
+
+                p2 :: rest2 ->
+                    toSvgLinesWithColor (List.drop 1 pointsRemaining) (toSvgLineWithColor p1 p2 colorStr :: lines) colorStr
+
+
 toSvgLine p1 p2 =
     line
         [ x1 (Tuple.first p1)
@@ -245,6 +480,17 @@ toSvgLine p1 p2 =
         , x2 (Tuple.first p2)
         , y2 (Tuple.second p2)
         , stroke "black"
+        ]
+        []
+
+
+toSvgLineWithColor p1 p2 colorStr =
+    line
+        [ x1 (Tuple.first p1)
+        , y1 (Tuple.second p1)
+        , x2 (Tuple.first p2)
+        , y2 (Tuple.second p2)
+        , stroke colorStr
         ]
         []
 
