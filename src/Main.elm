@@ -58,13 +58,22 @@ init _ =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        CharacterKey c ->
-            ( model, Cmd.none )
+        CharacterKey 'i' ->
+            ( { model | viewCenterY = model.viewCenterY + 10 }, Cmd.none )
 
-        ControlKey string ->
-            ( model, Cmd.none )
+        CharacterKey 'm' ->
+            ( { model | viewCenterY = model.viewCenterY - 10 }, Cmd.none )
+
+        CharacterKey 'l' ->
+            ( { model | viewCenterX = model.viewCenterX + 10 }, Cmd.none )
+
+        CharacterKey 'j' ->
+            ( { model | viewCenterX = model.viewCenterX - 10 }, Cmd.none )
 
         TimeUpdate tposix ->
+            ( model, Cmd.none )
+
+        _ ->
             ( model, Cmd.none )
 
 
