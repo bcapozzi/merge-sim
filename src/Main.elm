@@ -229,6 +229,9 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                 arcRadius =
                     scaleToView model lengthFeet
 
+                sweepFlag =
+                    getSweepFlag angleChangeDeg
+
                 arcPath =
                     String.join " "
                         [ "M"
@@ -239,7 +242,7 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         , arcRadius
                         , "0"
                         , "0"
-                        , "1"
+                        , sweepFlag
                         , Tuple.first v2
                         , Tuple.second v2
                         ]
@@ -254,12 +257,15 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         ]
                         []
 
+                directionFactor =
+                    getDirectionFactor angleChangeDeg
+
                 -- now do the edges
                 anglePlus =
-                    currentCourseDeg + 90
+                    currentCourseDeg + directionFactor * 90
 
                 angleMinus =
-                    currentCourseDeg - 90
+                    currentCourseDeg - directionFactor * 90
 
                 pointPlus =
                     projectPoint currentXY anglePlus 25.0
@@ -307,7 +313,7 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         , arcRadiusPlus
                         , "0"
                         , "0"
-                        , "1"
+                        , sweepFlag
                         , Tuple.first v2Plus
                         , Tuple.second v2Plus
                         ]
@@ -322,7 +328,7 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         , arcRadiusMinus
                         , "0"
                         , "0"
-                        , "1"
+                        , sweepFlag
                         , Tuple.first v2Minus
                         , Tuple.second v2Minus
                         ]
@@ -348,6 +354,24 @@ renderSegment model upperLeftXY currentXY currentCourseDeg segment =
                         []
             in
             ( [ entity, edgePlus, edgeMinus ], arcEndpointXY, currentCourseDeg + angleChangeDeg )
+
+
+getDirectionFactor : Float -> Float
+getDirectionFactor angleChange =
+    if angleChange > 0 then
+        1.0
+
+    else
+        -1.0
+
+
+getSweepFlag : Float -> String
+getSweepFlag angleChange =
+    if angleChange > 0 then
+        "1"
+
+    else
+        "0"
 
 
 renderLine model upperLeftXY currentXY lengthFeet courseDeg colorStr =
