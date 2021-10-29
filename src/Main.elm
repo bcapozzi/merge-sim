@@ -25,6 +25,7 @@ type alias Model =
     , viewHeightPixels : Int
     , roadCenterline : RoadCenterline
     , cars : List Car
+    , isRunning : Bool
     }
 
 
@@ -34,6 +35,7 @@ type alias Car =
     , courseDeg : Float
     , widthFeet : Float
     , lengthFeet : Float
+    , speedMph : Float
     }
 
 
@@ -53,15 +55,17 @@ type Msg
     = TimeUpdate Time.Posix
     | CharacterKey Char
     | ControlKey String
+    | Run
+    | Stop
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Arc 50.0 30.0, Linear 40.0 30.0, Arc 50.0 -30.0, Linear 50.0 0.0 ]) initCars, Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Arc 50.0 30.0, Linear 40.0 30.0, Arc 50.0 -30.0, Linear 50.0 0.0 ]) initCars False, Cmd.none )
 
 
 initCars =
-    [ Car 100.0 100.0 0.0 10.0 20.0 ]
+    [ Car 100.0 100.0 0.0 10.0 20.0 10.0 ]
 
 
 
@@ -69,13 +73,19 @@ initCars =
 --[ ( 100.0, 0.0 ), ( 100.0, 1000.0 ), ( 100.0, 2000.0 ) ], Cmd.none )
 
 
-updateCars cars angleChangeDeg =
+rotateCars cars angleChangeDeg =
     List.map (\c -> { c | courseDeg = c.courseDeg + angleChangeDeg }) cars
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        Run ->
+            ( { model | isRunning = True }, Cmd.none )
+
+        Stop ->
+            ( { model | isRunning = False }, Cmd.none )
+
         CharacterKey 'i' ->
             ( { model | viewCenterY = model.viewCenterY + 10 }, Cmd.none )
 
@@ -91,15 +101,41 @@ update msg model =
         CharacterKey 'r' ->
             let
                 updatedCars =
-                    updateCars model.cars 10
+                    rotateCars model.cars 10
             in
             ( { model | cars = updatedCars }, Cmd.none )
 
         TimeUpdate tposix ->
-            ( model, Cmd.none )
+            if model.isRunning then
+                let
+                    updatedCars =
+                        updateCars model.cars
+                in
+                ( { model | cars = updatedCars }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
 
         _ ->
             ( model, Cmd.none )
+
+
+updateCars cars =
+    List.map (\c -> updateCar c) cars
+
+
+updateCar car =
+    let
+        speedFeetPerSecond =
+            car.speedMph * 3600.0 / 5280.0
+
+        dx =
+            speedFeetPerSecond * sin (degrees car.courseDeg)
+
+        dy =
+            speedFeetPerSecond * cos (degrees car.courseDeg)
+    in
+    { car | centerX = car.centerX + dx, centerY = car.centerY + dy }
 
 
 subscriptions : Model -> Sub Msg
@@ -122,12 +158,18 @@ view model =
             renderCars model
     in
     div []
-        [ svg
-            [ width pxWidth
-            , height pxHeight
-            , viewBox (String.join " " [ "0", "0", pxWidth, pxHeight ])
+        [ div []
+            [ button [ onClick Run ] [ Html.text "Run" ]
+            , button [ onClick Stop ] [ Html.text "Stop" ]
             ]
-            (List.append carEntities roadEntities)
+        , div []
+            [ svg
+                [ width pxWidth
+                , height pxHeight
+                , viewBox (String.join " " [ "0", "0", pxWidth, pxHeight ])
+                ]
+                (List.append carEntities roadEntities)
+            ]
         ]
 
 
