@@ -24,6 +24,16 @@ type alias Model =
     , viewWidthPixels : Int
     , viewHeightPixels : Int
     , roadCenterline : RoadCenterline
+    , cars : List Car
+    }
+
+
+type alias Car =
+    { centerX : Float
+    , centerY : Float
+    , courseDeg : Float
+    , widthFeet : Float
+    , lengthFeet : Float
     }
 
 
@@ -47,12 +57,20 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Arc 50.0 30.0, Linear 40.0 30.0 ]), Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Arc 50.0 30.0, Linear 40.0 30.0, Arc 50.0 -30.0, Linear 50.0 0.0 ]) initCars, Cmd.none )
+
+
+initCars =
+    [ Car 100.0 100.0 0.0 10.0 20.0 ]
 
 
 
 --Arc 50.0 -90.0 ]), Cmd.none )
 --[ ( 100.0, 0.0 ), ( 100.0, 1000.0 ), ( 100.0, 2000.0 ) ], Cmd.none )
+
+
+updateCars cars angleChangeDeg =
+    List.map (\c -> { c | courseDeg = c.courseDeg + angleChangeDeg }) cars
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -69,6 +87,13 @@ update msg model =
 
         CharacterKey 'j' ->
             ( { model | viewCenterX = model.viewCenterX - 10 }, Cmd.none )
+
+        CharacterKey 'r' ->
+            let
+                updatedCars =
+                    updateCars model.cars 10
+            in
+            ( { model | cars = updatedCars }, Cmd.none )
 
         TimeUpdate tposix ->
             ( model, Cmd.none )
@@ -89,6 +114,12 @@ view model =
 
         pxHeight =
             String.fromInt model.viewHeightPixels
+
+        roadEntities =
+            List.append (renderViewBox model) (renderRoad model)
+
+        carEntities =
+            renderCars model
     in
     div []
         [ svg
@@ -96,8 +127,147 @@ view model =
             , height pxHeight
             , viewBox (String.join " " [ "0", "0", pxWidth, pxHeight ])
             ]
-            (List.append (renderViewBox model) (renderRoad model))
+            (List.append carEntities roadEntities)
         ]
+
+
+renderCars model =
+    List.map (\c -> renderCar c model) model.cars
+
+
+toRectangleXY car =
+    let
+        lowerLeft =
+            getLowerLeftCorner car
+
+        lowerRight =
+            getLowerRightCorner car
+
+        upperRight =
+            getUpperRightCorner car
+
+        upperLeft =
+            getUpperLeftCorner car
+    in
+    [ lowerLeft, lowerRight, upperRight, upperLeft, lowerLeft ]
+
+
+rotateBy point angleDeg =
+    let
+        theta =
+            -1.0 * degrees angleDeg
+
+        xr =
+            cos theta * Tuple.first point - sin theta * Tuple.second point
+
+        yr =
+            sin theta * Tuple.first point + cos theta * Tuple.second point
+    in
+    ( xr, yr )
+
+
+
+-- compute in car frame
+-- rotate by course
+-- translate to center
+
+
+getLowerLeftCorner car =
+    let
+        dx =
+            -1.0 * car.widthFeet / 2.0
+
+        dy =
+            -1.0 * car.lengthFeet / 2.0
+
+        ( xr, yr ) =
+            rotateBy ( dx, dy ) car.courseDeg
+    in
+    ( car.centerX + xr, car.centerY + yr )
+
+
+getLowerRightCorner car =
+    let
+        dx =
+            1.0 * car.widthFeet / 2.0
+
+        dy =
+            -1.0 * car.lengthFeet / 2.0
+
+        ( xr, yr ) =
+            rotateBy ( dx, dy ) car.courseDeg
+    in
+    ( car.centerX + xr, car.centerY + yr )
+
+
+getUpperRightCorner car =
+    let
+        dx =
+            1.0 * car.widthFeet / 2.0
+
+        dy =
+            1.0 * car.lengthFeet / 2.0
+
+        ( xr, yr ) =
+            rotateBy ( dx, dy ) car.courseDeg
+    in
+    ( car.centerX + xr, car.centerY + yr )
+
+
+getUpperLeftCorner car =
+    let
+        dx =
+            -1.0 * car.widthFeet / 2.0
+
+        dy =
+            1.0 * car.lengthFeet / 2.0
+
+        ( xr, yr ) =
+            rotateBy ( dx, dy ) car.courseDeg
+    in
+    ( car.centerX + xr, car.centerY + yr )
+
+
+renderCar car model =
+    let
+        carBoundaryPointsXY =
+            toRectangleXY car
+
+        carBoundaryPointsPixels =
+            List.map (\p -> toViewCoords2 p model) carBoundaryPointsXY
+
+        carBoundaryPath =
+            toBoundaryPath carBoundaryPointsPixels
+
+        entity =
+            Svg.path
+                [ d (String.join " " carBoundaryPath)
+                , stroke "gray"
+                , fill "gray"
+                , strokeWidth "2"
+                , fillOpacity "0.5"
+                ]
+                []
+    in
+    entity
+
+
+toBoundaryPath points =
+    constructBoundaryPath points []
+
+
+constructBoundaryPath points pathSoFar =
+    case points of
+        [] ->
+            pathSoFar
+
+        point :: rest ->
+            case pathSoFar of
+                [] ->
+                    constructBoundaryPath rest [ "M", Tuple.first point, Tuple.second point ]
+
+                _ ->
+                    constructBoundaryPath rest (List.append pathSoFar [ "L", Tuple.first point, Tuple.second point ])
 
 
 renderViewBox model =
