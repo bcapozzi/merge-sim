@@ -61,11 +61,12 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 50.0 0.0, Arc 50.0 30.0, Linear 40.0 30.0, Arc 50.0 -30.0, Linear 50.0 0.0 ]) initCars False, Cmd.none )
+    --    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 500.0 0.0 ]) initCars False, Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 100.0 0.0, Arc 50.0 30.0, Linear 100.0 30.0, Arc 50.0 -30.0, Linear 100.0 0.0 ]) initCars False, Cmd.none )
 
 
 initCars =
-    [ Car 100.0 100.0 0.0 10.0 20.0 10.0 ]
+    [ Car 125.0 100.0 0.0 10.0 20.0 10.0 ]
 
 
 
@@ -109,7 +110,7 @@ update msg model =
             if model.isRunning then
                 let
                     updatedCars =
-                        updateCars model.cars
+                        updateCars model.cars model.roadCenterline
                 in
                 ( { model | cars = updatedCars }, Cmd.none )
 
@@ -120,22 +121,578 @@ update msg model =
             ( model, Cmd.none )
 
 
-updateCars cars =
-    List.map (\c -> updateCar c) cars
+updateCars cars roadCenterline =
+    List.map (\c -> updateCar c roadCenterline) cars
 
 
-updateCar car =
+
+-- need to associate each car with a Lane
+
+
+toCoords segment originXY =
+    case segment of
+        Linear lengthFeet courseDeg ->
+            let
+                dx =
+                    lengthFeet * sin (degrees courseDeg)
+
+                dy =
+                    lengthFeet * cos (degrees courseDeg)
+
+                nextX =
+                    Tuple.first originXY + dx
+
+                nextY =
+                    Tuple.second originXY + dy
+            in
+            [ originXY, ( nextX, nextY ) ]
+
+        _ ->
+            []
+
+
+type AbsoluteSegment
+    = AbsoluteSegment
+        { descriptor : Segment
+        , startXY : ( Float, Float )
+        , startCourseDeg : Float
+        , endXY : ( Float, Float )
+        , endCourseDeg : Float
+        , next : Maybe AbsoluteSegment
+        }
+
+
+toSegmentRecord segment remaining currentXY currentCourseDeg =
+    case segment of
+        Linear lengthFeet courseDeg ->
+            let
+                dx =
+                    lengthFeet * sin (degrees courseDeg)
+
+                dy =
+                    lengthFeet * cos (degrees courseDeg)
+
+                nextXY =
+                    ( Tuple.first currentXY + dx, Tuple.second currentXY + dy )
+            in
+            { descriptor = segment
+            , startXY = currentXY
+            , startCourseDeg = currentCourseDeg
+            , endXY = nextXY
+            , endCourseDeg = courseDeg
+            }
+
+        Arc lengthFeet angleChangeDeg ->
+            let
+                ( arcOriginXY, arcEndpointXY ) =
+                    computeArcPoints currentXY currentCourseDeg angleChangeDeg lengthFeet
+            in
+            { descriptor = segment
+            , startXY = currentXY
+            , startCourseDeg = currentCourseDeg
+            , endXY = arcEndpointXY
+            , endCourseDeg = currentCourseDeg + angleChangeDeg
+            }
+
+
+recursiveLink remaining resultsSoFar =
+    case remaining of
+        [] ->
+            List.reverse resultsSoFar
+
+        first :: rest ->
+            let
+                updated =
+                    ( first, List.head rest )
+            in
+            recursiveLink (List.drop 1 remaining) (updated :: resultsSoFar)
+
+
+linkRecords records =
+    recursiveLink records []
+
+
+recursiveGenerateSegments segmentsToGo currentXY currentCourseDeg resultsSoFar =
+    case segmentsToGo of
+        [] ->
+            let
+                linkedRecords =
+                    linkRecords (List.reverse resultsSoFar)
+            in
+            linkedRecords
+
+        first :: rest ->
+            let
+                segmentRecord =
+                    toSegmentRecord first rest currentXY currentCourseDeg
+            in
+            recursiveGenerateSegments (List.drop 1 segmentsToGo) segmentRecord.endXY segmentRecord.endCourseDeg (segmentRecord :: resultsSoFar)
+
+
+toAbsoluteSegments roadCenterline =
+    recursiveGenerateSegments roadCenterline.segments roadCenterline.originXY roadCenterline.originCourseDeg []
+
+
+determineTargetSegment car roadCenterline =
     let
+        segments =
+            toAbsoluteSegments roadCenterline
+
+        contains =
+            List.filter (\s -> segmentContains s car) segments
+
+        crossTrackSegments =
+            List.map (\c -> constructCrossTrackSegment c car) contains
+
+        sortedSegments =
+            List.sortBy .crossTrackFeet crossTrackSegments
+
+        closest =
+            List.head sortedSegments
+    in
+    case closest of
+        Just aCrossTrackRecord ->
+            let
+                linkedRecord =
+                    aCrossTrackRecord.record
+
+                record =
+                    Tuple.first linkedRecord
+            in
+            case record.descriptor of
+                Linear _ _ ->
+                    Just record
+
+                Arc _ _ ->
+                    let
+                        nextRecord =
+                            Tuple.second linkedRecord
+                    in
+                    nextRecord
+
+        Nothing ->
+            Nothing
+
+
+constructCrossTrackSegment linkedRecord car =
+    let
+        segmentRecord =
+            Tuple.first linkedRecord
+    in
+    case segmentRecord.descriptor of
+        Linear lengthFeet courseDeg ->
+            let
+                crossTrackFeet =
+                    computeCrossTrackError segmentRecord.startXY courseDeg ( car.centerX, car.centerY )
+            in
+            { record = linkedRecord
+            , crossTrackFeet = abs crossTrackFeet
+            }
+
+        Arc lengthFeet angleChangeDeg ->
+            let
+                startXY =
+                    segmentRecord.startXY
+
+                startCourseDeg =
+                    segmentRecord.startCourseDeg
+
+                ( arcOriginXY, arcEndpointXY ) =
+                    computeArcPoints startXY startCourseDeg angleChangeDeg lengthFeet
+
+                distanceFromOrigin =
+                    computeDistance (Just arcOriginXY) (Just ( car.centerX, car.centerY ))
+            in
+            { record = linkedRecord
+            , crossTrackFeet = abs (lengthFeet - distanceFromOrigin)
+            }
+
+
+segmentContains linkedRecord car =
+    let
+        segmentRecord =
+            Tuple.first linkedRecord
+    in
+    case segmentRecord.descriptor of
+        Linear lengthFeet courseDeg ->
+            let
+                projectionFeet =
+                    computeProjection segmentRecord.startXY courseDeg ( car.centerX, car.centerY )
+            in
+            projectionFeet > 0 && projectionFeet <= lengthFeet
+
+        Arc lengthFeet angleChangeDeg ->
+            let
+                startXY =
+                    segmentRecord.startXY
+
+                startCourseDeg =
+                    segmentRecord.startCourseDeg
+
+                ( arcOriginXY, arcEndpointXY ) =
+                    computeArcPoints startXY startCourseDeg angleChangeDeg lengthFeet
+
+                -- is point within a given distance and course range of arc originXY
+                r1 =
+                    lengthFeet - 25.0
+
+                r2 =
+                    lengthFeet + 25.0
+
+                distanceFromOrigin =
+                    computeDistance (Just arcOriginXY) (Just ( car.centerX, car.centerY ))
+
+                courseToPointDeg =
+                    computeCourseDeg360 arcOriginXY ( car.centerX, car.centerY )
+
+                course1 =
+                    computeCourseDeg360 arcOriginXY startXY
+
+                course2 =
+                    computeCourseDeg360 arcOriginXY arcEndpointXY
+            in
+            withinDistance r1 r2 distanceFromOrigin && withinAzimuth (limit360 course1) (limit360 course2) courseToPointDeg
+
+
+withinDistance dmin dmax d =
+    dmin <= d && d <= dmax
+
+
+withinAzimuth az1 az2 az =
+    if az1 < az2 then
+        az1 <= az && az <= az2
+
+    else
+        az2 <= az && az <= az1
+
+
+computeProjection originXY courseDeg pointXY =
+    let
+        distanceToPoint =
+            computeDistance (Just originXY) (Just pointXY)
+
+        courseToPointDeg =
+            computeCourseDeg360 originXY pointXY
+
+        relativeCourseDeg =
+            courseToPointDeg - courseDeg
+    in
+    distanceToPoint * cos (degrees relativeCourseDeg)
+
+
+computeCrossTrackError originXY courseDeg pointXY =
+    let
+        distanceToPoint =
+            computeDistance (Just originXY) (Just pointXY)
+
+        courseToPointDeg =
+            computeCourseDeg360 originXY pointXY
+
+        relativeCourseDeg =
+            courseToPointDeg - courseDeg
+    in
+    distanceToPoint * sin (degrees relativeCourseDeg)
+
+
+computeSteeringCommand car roadCenterline =
+    let
+        targetSegment =
+            determineTargetSegment car roadCenterline
+    in
+    case targetSegment of
+        Nothing ->
+            0.0
+
+        Just aSegment ->
+            case aSegment.descriptor of
+                Linear lengthFeet courseDeg ->
+                    let
+                        -- project onto segment
+                        coords =
+                            toCoords aSegment.descriptor aSegment.startXY
+
+                        dToPoint =
+                            computeDistance (List.head coords) (Just ( car.centerX, car.centerY ))
+
+                        _ =
+                            Debug.log "Distance to point: " dToPoint
+
+                        courseToPoint =
+                            computeCourse (List.head coords) (Just ( car.centerX, car.centerY ))
+
+                        _ =
+                            Debug.log "Course to point: " courseToPoint
+
+                        courseOnSegment =
+                            computeCourse (List.head coords) (List.head (List.drop 1 coords))
+
+                        _ =
+                            Debug.log "Segment course: " courseOnSegment
+
+                        deltaCourse =
+                            courseToPoint - courseOnSegment
+
+                        _ =
+                            Debug.log "Delta course: " deltaCourse
+
+                        dOnSegment =
+                            dToPoint * cos deltaCourse
+
+                        _ =
+                            Debug.log "Distance on segment: " dOnSegment
+
+                        targetDistance =
+                            dOnSegment + 50
+
+                        targetPoint =
+                            projectOnSegment coords targetDistance
+
+                        _ =
+                            Debug.log "Target point on segment: " targetPoint
+
+                        dx =
+                            Tuple.first targetPoint - car.centerX
+
+                        dy =
+                            Tuple.second targetPoint - car.centerY
+
+                        _ =
+                            Debug.log "dx: " dx
+
+                        _ =
+                            Debug.log "dy: " dy
+
+                        targetCourseDeg =
+                            180 / pi * atan2 dx dy
+                    in
+                    targetCourseDeg - car.courseDeg
+
+                Arc radius angleChangeDeg ->
+                    0.0
+
+
+recursiveProject coordsRemaining targetDistance distanceSoFar currentXY currentCourse =
+    case coordsRemaining of
+        [] ->
+            if distanceSoFar < targetDistance then
+                let
+                    dToGo =
+                        targetDistance - distanceSoFar
+
+                    dx =
+                        dToGo * sin currentCourse
+
+                    dy =
+                        dToGo * cos currentCourse
+
+                    nextX =
+                        Tuple.first currentXY + dx
+
+                    nextY =
+                        Tuple.second currentXY + dy
+                in
+                ( nextX, nextY )
+
+            else
+                currentXY
+
+        first :: rest ->
+            let
+                dOnSegment =
+                    computeDistance (Just currentXY) (Just first)
+
+                courseOnSegment =
+                    computeCourse (Just currentXY) (Just first)
+
+                dAfterSegment =
+                    distanceSoFar + dOnSegment
+            in
+            if dAfterSegment > targetDistance then
+                let
+                    dToGo =
+                        targetDistance - distanceSoFar
+
+                    dx =
+                        dToGo * sin courseOnSegment
+
+                    dy =
+                        dToGo * cos courseOnSegment
+
+                    nextX =
+                        Tuple.first currentXY + dx
+
+                    nextY =
+                        Tuple.second currentXY + dy
+                in
+                ( nextX, nextY )
+
+            else
+                recursiveProject (List.drop 1 coordsRemaining) targetDistance dAfterSegment first courseOnSegment
+
+
+projectOnSegment coords targetDistance =
+    let
+        currentCourse =
+            computeCourse (List.head coords) (List.head (List.drop 1 coords))
+    in
+    case List.head coords of
+        Nothing ->
+            ( 0.0, 0.0 )
+
+        Just aCoord ->
+            recursiveProject (List.drop 1 coords) targetDistance 0.0 aCoord currentCourse
+
+
+
+-- let
+--
+--
+--     --segments = toAbsoluteSegments roadCenterline
+--
+--     --( currentSegment, currentDistance, nextSegment ) =
+--     --    mapToRoad ( car.centerX, car.centerY ) segments
+--
+--     --steeringTarget =
+--     --    computeSteeringTarget currentSegment currentDistance nextSegment
+--
+--     -- compute steering command to aim at steering target
+-- in
+-- steeringTarget - car.courseDeg
+-- getLastSegment segments =
+--   case segments of
+--     first :: rest ->
+--       case rest of
+--         Nothing ->
+--           first
+--         Just aList ->
+--           getLastSegment rest
+--     Nothing ->
+--       Nothing
+--
+--
+-- sumLengthOver segments distanceSoFar =
+--   case segments of
+--     [] ->
+--       distanceSoFar
+--     first :: rest ->
+--       sumLengthOver rest (distanceSoFar + first.length)
+--
+
+
+computeDistance from to =
+    case from of
+        Nothing ->
+            0.0
+
+        Just apoint ->
+            case to of
+                Nothing ->
+                    0.0
+
+                Just apoint2 ->
+                    let
+                        dx =
+                            Tuple.first apoint2 - Tuple.first apoint
+
+                        dy =
+                            Tuple.second apoint2 - Tuple.second apoint
+                    in
+                    sqrt (dx * dx + dy * dy)
+
+
+computeCourse from to =
+    case from of
+        Nothing ->
+            0.0
+
+        Just apoint ->
+            case to of
+                Nothing ->
+                    0.0
+
+                Just apoint2 ->
+                    let
+                        dx =
+                            Tuple.first apoint2 - Tuple.first apoint
+
+                        dy =
+                            Tuple.second apoint2 - Tuple.second apoint
+                    in
+                    atan2 dx dy
+
+
+
+--
+-- getLastPointOnSegment segment =
+--   case segment of
+--     Nothing ->
+--       Nothing
+--     Just asegment ->
+--       getLastPoint asegment.points
+--
+-- getLastPoint points =
+--   case points of
+--     first :: rest ->
+--       case rest of
+--         Nothing ->
+--           first
+--         _ ->
+--           getLastPoint rest
+--     [] ->
+--       Nothing
+--
+-- projectAlong dToPoint courseToPoint
+--
+-- -- mapToRoad centerXY segments =
+-- --   let
+-- --     contains = List.filter (\s -> segmentContains centerXY s) segments
+-- --   in
+-- --     case contains of
+-- --       [] ->
+-- --         let
+-- --           lastSegment = getLastSegment segments
+-- --           distance = sumLengthOver segments 0.0
+-- --           lastPoint = getLastPointOnSegment lastSegment
+-- --           dToPoint = computeDistance lastPoint centerXY
+-- --           courseToPoint = computeCourse lastPoint centerXY
+-- --           dAlongProjection = projectAlong dToPoint courseToPoint last
+-- --         in
+-- --         -- extend LAST segment
+-- --         (lastSegment, distance + dAlongProjection, Nothing)
+-- --
+-- --       first :: rest ->
+-- --         case rest of
+-- --           [] ->
+-- --
+-- --           first2 :: rest2 ->
+--
+
+
+updateCar car roadCenterline =
+    let
+        steeringCommand =
+            computeSteeringCommand car roadCenterline
+
+        _ =
+            Debug.log "Steering command (Deg)" steeringCommand
+
         speedFeetPerSecond =
             car.speedMph * 3600.0 / 5280.0
+
+        -- compute center of instantaneous steering circle formed by intersection of front wheel and back wheels
+        turnRateRadiansPerSec =
+            speedFeetPerSecond / car.lengthFeet * tan (degrees steeringCommand)
 
         dx =
             speedFeetPerSecond * sin (degrees car.courseDeg)
 
         dy =
             speedFeetPerSecond * cos (degrees car.courseDeg)
+
+        deltaCourseDeg =
+            turnRateRadiansPerSec * 180 / pi
     in
-    { car | centerX = car.centerX + dx, centerY = car.centerY + dy }
+    { car | centerX = car.centerX + dx, centerY = car.centerY + dy, courseDeg = car.courseDeg + deltaCourseDeg }
 
 
 subscriptions : Model -> Sub Msg
