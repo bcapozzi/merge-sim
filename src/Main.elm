@@ -27,6 +27,39 @@ type alias Model =
     , cars : List Car
     , isRunning : Bool
     , laneWidthFeet : Float
+    , lanes : List Lane
+    }
+
+
+type alias Lane =
+    { id : String
+    , segments : List LaneSegment
+    }
+
+
+type alias Radius =
+    Float
+
+
+type alias Angle =
+    Float
+
+
+type alias Point =
+    ( Float, Float )
+
+
+type LaneSegmentType
+    = LinearLane
+    | ArcLane Radius Angle
+
+
+type alias LaneSegment =
+    { startXY : Point
+    , startCourseDeg : Float
+    , endXY : Point
+    , endCourseDeg : Float
+    , segmentType : LaneSegmentType
     }
 
 
@@ -67,17 +100,73 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
+    let
+        centerline =
+            RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 100.0 0.0, Arc 50.0 30.0, Linear 100.0 30.0, Arc 50.0 -30.0, Linear 100.0 0.0 ]
+
+        cars =
+            initCars
+
+        lanes =
+            initLanes centerline 15.0
+    in
     --    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 500.0 0.0 ]) initCars False, Cmd.none )
-    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 100.0 0.0, Arc 50.0 30.0, Linear 100.0 30.0, Arc 50.0 -30.0, Linear 100.0 0.0 ]) initCars False 15.0, Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 centerline cars False 15.0 lanes, Cmd.none )
 
 
 initCars =
     [ Car 107.5 100.0 0.0 10.0 20.0 10.0 ]
 
 
+initLanes centerline laneWidthFeet =
+    let
+        originLeftXY =
+            shift { startXY = centerline.originXY, startCourseDeg = centerline.originCourseDeg } (-laneWidthFeet / 2.0)
+
+        originRightXY =
+            shift { startXY = centerline.originXY, startCourseDeg = centerline.originCourseDeg } (laneWidthFeet / 2.0)
+
+        originCourse =
+            centerline.originCourseDeg
+
+        leftLaneSegments =
+            generateLaneSegments { startXY = originLeftXY, startCourseDeg = centerline.originCourseDeg } centerline.segments []
+
+        rightLaneSegments =
+            generateLaneSegments { startXY = originRightXY, startCourseDeg = centerline.originCourseDeg } centerline.segments []
+    in
+    [ Lane "Left" leftLaneSegments, Lane "Right" rightLaneSegments ]
+
+
+generateLaneSegments origin centerlineSegmentsRemaining laneSegmentsSoFar =
+    case centerlineSegmentsRemaining of
+        [] ->
+            List.reverse laneSegmentsSoFar
+
+        first :: rest ->
+            let
+                laneSegment =
+                    generateLaneSegment first origin
+            in
+            generateLaneSegments { startXY = laneSegment.endXY, startCourseDeg = laneSegment.endCourseDeg } rest (laneSegment :: laneSegmentsSoFar)
+
+
 
 --Arc 50.0 -90.0 ]), Cmd.none )
 --[ ( 100.0, 0.0 ), ( 100.0, 1000.0 ), ( 100.0, 2000.0 ) ], Cmd.none )
+
+
+generateLaneSegment centerlineSegment origin =
+    let
+        ( endXY, endCourseDeg ) =
+            determineEndConditions centerlineSegment origin.startXY origin.startCourseDeg
+    in
+    case centerlineSegment of
+        Linear lengthFeet courseDeg ->
+            LaneSegment origin.startXY origin.startCourseDeg endXY endCourseDeg LinearLane
+
+        Arc radiusFeet angleChangeDeg ->
+            LaneSegment origin.startXY origin.startCourseDeg endXY endCourseDeg (ArcLane radiusFeet angleChangeDeg)
 
 
 rotateCars cars angleChangeDeg =
@@ -718,7 +807,7 @@ view model =
             List.append (renderViewBox model) (renderRoad model)
 
         laneEntities =
-            renderLanes model
+            renderLanes2 model "blue"
 
         carEntities =
             renderCars model
@@ -959,6 +1048,79 @@ generateLane segment origin relativeOffsetFeet =
 
         Linear lengthFeet courseDeg ->
             ( RenderableLine offsetOrigin origin.startCourseDeg endXY courseDeg, endXY, courseDeg )
+
+
+renderLanes2 model colorStr =
+    let
+        entityLists =
+            List.map (\r -> renderLane2 model r colorStr) model.lanes
+    in
+    List.concat entityLists
+
+
+renderLane2 model lane colorStr =
+    let
+        entities =
+            List.map (\s -> renderLaneSegment model s colorStr) lane.segments
+    in
+    entities
+
+
+renderLaneSegment model laneSegment colorStr =
+    case laneSegment.segmentType of
+        LinearLane ->
+            let
+                v1 =
+                    toViewCoords2 laneSegment.startXY model
+
+                v2 =
+                    toViewCoords2 laneSegment.endXY model
+
+                entity =
+                    toSvgLineWithColor v1 v2 colorStr
+            in
+            entity
+
+        ArcLane radiusFeet angleChangeDeg ->
+            let
+                v1 =
+                    toViewCoords2 laneSegment.startXY model
+
+                v2 =
+                    toViewCoords2 laneSegment.endXY model
+
+                arcRadius =
+                    scaleToView model radiusFeet
+
+                sweepFlag =
+                    getSweepFlag angleChangeDeg
+
+                arcPath =
+                    String.join " "
+                        [ "M"
+                        , Tuple.first v1
+                        , Tuple.second v1
+                        , "A"
+                        , arcRadius
+                        , arcRadius
+                        , "0"
+                        , "0"
+                        , sweepFlag
+                        , Tuple.first v2
+                        , Tuple.second v2
+                        ]
+
+                entity =
+                    Svg.path
+                        [ d arcPath
+                        , stroke colorStr
+                        , fill "white"
+                        , strokeWidth "2"
+                        , fillOpacity "0.0"
+                        ]
+                        []
+            in
+            entity
 
 
 renderLane model renderable colorStr =
