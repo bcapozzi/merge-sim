@@ -26,6 +26,7 @@ type alias Model =
     , roadCenterline : RoadCenterline
     , cars : List Car
     , isRunning : Bool
+    , laneWidthFeet : Float
     }
 
 
@@ -51,6 +52,11 @@ type Segment
     | Arc Float Float
 
 
+type Renderable
+    = RenderableArc ( Float, Float ) Float ( Float, Float ) Float String Float
+    | RenderableLine ( Float, Float ) Float ( Float, Float ) Float
+
+
 type Msg
     = TimeUpdate Time.Posix
     | CharacterKey Char
@@ -62,11 +68,11 @@ type Msg
 init : () -> ( Model, Cmd Msg )
 init _ =
     --    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 500.0 0.0 ]) initCars False, Cmd.none )
-    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 100.0 0.0, Arc 50.0 30.0, Linear 100.0 30.0, Arc 50.0 -30.0, Linear 100.0 0.0 ]) initCars False, Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 100.0 0.0, Arc 50.0 30.0, Linear 100.0 30.0, Arc 50.0 -30.0, Linear 100.0 0.0 ]) initCars False 15.0, Cmd.none )
 
 
 initCars =
-    [ Car 125.0 100.0 0.0 10.0 20.0 10.0 ]
+    [ Car 107.5 100.0 0.0 10.0 20.0 10.0 ]
 
 
 
@@ -711,6 +717,9 @@ view model =
         roadEntities =
             List.append (renderViewBox model) (renderRoad model)
 
+        laneEntities =
+            renderLanes model
+
         carEntities =
             renderCars model
     in
@@ -725,7 +734,7 @@ view model =
                 , height pxHeight
                 , viewBox (String.join " " [ "0", "0", pxWidth, pxHeight ])
                 ]
-                (List.append carEntities roadEntities)
+                (List.append carEntities laneEntities)
             ]
         ]
 
@@ -884,6 +893,168 @@ renderViewBox model =
     ]
 
 
+renderLanes model =
+    let
+        originLeftXY =
+            shift { startXY = model.roadCenterline.originXY, startCourseDeg = model.roadCenterline.originCourseDeg } (-model.laneWidthFeet / 2.0)
+
+        originRightXY =
+            shift { startXY = model.roadCenterline.originXY, startCourseDeg = model.roadCenterline.originCourseDeg } (model.laneWidthFeet / 2.0)
+
+        originCourse =
+            model.roadCenterline.originCourseDeg
+    in
+    recursiveRenderLanes model { startXY = originLeftXY, startCourseDeg = originCourse } { startXY = originRightXY, startCourseDeg = originCourse } model.roadCenterline.segments []
+
+
+recursiveRenderLanes model originLeft originRight segmentsRemaining resultsSoFar =
+    case segmentsRemaining of
+        [] ->
+            resultsSoFar
+
+        first :: rest ->
+            let
+                ( leftLane, endXY1, endCourse1 ) =
+                    generateLane first originLeft 0.0
+
+                ( rightLane, endXY2, endCourse2 ) =
+                    generateLane first originRight 0.0
+
+                renderedLeft =
+                    renderLane model leftLane "blue"
+
+                renderedRight =
+                    renderLane model rightLane "blue"
+            in
+            recursiveRenderLanes model { startXY = endXY1, startCourseDeg = endCourse1 } { startXY = endXY2, startCourseDeg = endCourse2 } rest (List.append [ renderedLeft, renderedRight ] resultsSoFar)
+
+
+getProjection relativeOffsetFeet =
+    if relativeOffsetFeet < 0 then
+        ( abs relativeOffsetFeet, -90.0 )
+
+    else
+        ( relativeOffsetFeet, 90.0 )
+
+
+shift origin relativeOffsetFeet =
+    let
+        ( relativeDistance, relativeCourseDeg ) =
+            getProjection relativeOffsetFeet
+    in
+    projectPoint origin.startXY (origin.startCourseDeg + relativeCourseDeg) relativeDistance
+
+
+generateLane segment origin relativeOffsetFeet =
+    let
+        offsetOrigin =
+            shift origin relativeOffsetFeet
+
+        ( endXY, endCourseDeg ) =
+            determineEndConditions segment offsetOrigin origin.startCourseDeg
+    in
+    case segment of
+        Arc radiusFeet angleChangeDeg ->
+            ( RenderableArc offsetOrigin origin.startCourseDeg endXY endCourseDeg (getSweepFlag angleChangeDeg) radiusFeet, endXY, endCourseDeg )
+
+        Linear lengthFeet courseDeg ->
+            ( RenderableLine offsetOrigin origin.startCourseDeg endXY courseDeg, endXY, courseDeg )
+
+
+renderLane model renderable colorStr =
+    case renderable of
+        RenderableArc startXY startCourseDeg endXY endCourseDeg sweepFlag radiusFeet ->
+            let
+                v1 =
+                    toViewCoords2 startXY model
+
+                v2 =
+                    toViewCoords2 endXY model
+
+                arcRadius =
+                    scaleToView model radiusFeet
+
+                arcPath =
+                    String.join " "
+                        [ "M"
+                        , Tuple.first v1
+                        , Tuple.second v1
+                        , "A"
+                        , arcRadius
+                        , arcRadius
+                        , "0"
+                        , "0"
+                        , sweepFlag
+                        , Tuple.first v2
+                        , Tuple.second v2
+                        ]
+
+                entity =
+                    Svg.path
+                        [ d arcPath
+                        , stroke "black"
+                        , fill "white"
+                        , strokeWidth "2"
+                        , fillOpacity "0.0"
+                        ]
+                        []
+            in
+            entity
+
+        RenderableLine startXY startCourseDeg endXY endCourseDeg ->
+            let
+                v1 =
+                    toViewCoords2 startXY model
+
+                v2 =
+                    toViewCoords2 endXY model
+
+                entity =
+                    toSvgLineWithColor v1 v2 colorStr
+            in
+            entity
+
+
+determineEndConditions segment startXY startCourseDeg =
+    case segment of
+        Arc lengthFeet angleChangeDeg ->
+            let
+                ( arcOriginXY, arcEndpointXY ) =
+                    computeArcPoints startXY startCourseDeg angleChangeDeg lengthFeet
+            in
+            ( arcEndpointXY, startCourseDeg + angleChangeDeg )
+
+        Linear lengthFeet courseDeg ->
+            let
+                dx =
+                    lengthFeet * sin (degrees courseDeg)
+
+                dy =
+                    lengthFeet * cos (degrees courseDeg)
+
+                nextXY =
+                    ( Tuple.first startXY + dx, Tuple.second startXY + dy )
+            in
+            ( nextXY, courseDeg )
+
+
+
+-- type alias RenderableArc =
+--     { startXY : ( Float, Float )
+--     , startCourseDeg : Float
+--     , endXY : ( Float, Float )
+--     , endCourseDeg : Float
+--     , sweepFlag : Int
+--     , radiusFeet : Float
+--     }
+--type alias RenderableLine =
+--    { startXY : ( Float, Float )
+--    , startCourseDeg : Float
+--    , endXY : ( Float, Float )
+--    , endCourseDeg : Float
+--    }
+
+
 renderRoad model =
     -- need to first compute road coordinates relative to the viewbox
     let
@@ -895,33 +1066,6 @@ renderRoad model =
 
         entities =
             toSvg model ( upperLeftX, upperLeftY ) model.roadCenterline
-
-        -- compute road coordinates relative to upper left corner
-        --roadCoordsXY =
-        --    List.map (\p -> translate p ( upperLeftX, upperLeftY )) model.roadCenterline
-        -- now project endpoints of each segment perpendicular to centerline based on road width
-        --edge1CoordsXY =
-        --    projectEdges roadCoordsXY 90 25 []
-        --edge2CoordsXY =
-        --    projectEdges roadCoordsXY -90 25 []
-        -- now convert relative to view box
-        --roadCoordsPixels =
-        --    List.map (\p -> toViewCoords p model) roadCoordsXY
-        --
-        -- edge1CoordsPixels =
-        --     List.map (\p -> toViewCoords p model) edge1CoordsXY
-        --
-        -- edge2CoordsPixels =
-        --     List.map (\p -> toViewCoords p model) edge2CoordsXY
-        --
-        -- centerLine =
-        --     toSvgLines roadCoordsPixels []
-        --
-        -- edge1 =
-        --     toSvgLines edge1CoordsPixels []
-        --
-        -- edge2 =
-        --     toSvgLines edge2CoordsPixels []
     in
     entities
 
