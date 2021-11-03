@@ -72,6 +72,7 @@ type alias Car =
     , speedMph : Float
     , laneID : String
     , distance : Float
+    , maneuver : List ( Float, Float )
     }
 
 
@@ -100,6 +101,76 @@ type Msg
     | Stop
 
 
+bezier startXY startCourse endXY endCourse controlOffset =
+    let
+        tValues =
+            List.map (\n -> toFloat n / 100.0) (List.range 0 100)
+
+        c1 =
+            startXY
+
+        c2 =
+            projectPoint startXY startCourse controlOffset
+
+        c3 =
+            projectPoint endXY (endCourse + 180) controlOffset
+
+        c4 =
+            endXY
+    in
+    List.map (\t -> connectBezier [ ( c1, c2 ), ( c2, c3 ), ( c3, c4 ) ] t) tValues
+
+
+connectBezier segments t =
+    if List.length segments == 1 then
+        case List.head segments of
+            Nothing ->
+                ( 0.0, 0.0 )
+
+            Just aSegment ->
+                findPointOnSegment aSegment t
+
+    else
+        let
+            nextSegments =
+                connectSegments segments t []
+        in
+        connectBezier nextSegments t
+
+
+connectSegments segments t resultsSoFar =
+    case segments of
+        first :: rest ->
+            case rest of
+                next :: rest2 ->
+                    let
+                        p1 =
+                            findPointOnSegment first t
+
+                        p2 =
+                            findPointOnSegment next t
+                    in
+                    connectSegments (List.drop 1 segments) t (List.reverse (( p1, p2 ) :: resultsSoFar))
+
+                [] ->
+                    resultsSoFar
+
+        [] ->
+            resultsSoFar
+
+
+findPointOnSegment : ( ( Float, Float ), ( Float, Float ) ) -> Float -> ( Float, Float )
+findPointOnSegment ( from, to ) t =
+    let
+        dx =
+            Tuple.first to - Tuple.first from
+
+        dy =
+            Tuple.second to - Tuple.second from
+    in
+    ( Tuple.first from + t * dx, Tuple.second from + t * dy )
+
+
 init : () -> ( Model, Cmd Msg )
 init _ =
     let
@@ -117,7 +188,7 @@ init _ =
 
 
 initCars =
-    [ Car 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 ]
+    [ Car 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 [], Car 92.5 110.0 0.0 10.0 20.0 12.0 "Left" 10.0 [] ]
 
 
 initLanes centerline laneWidthFeet =
@@ -208,14 +279,65 @@ update msg model =
                 let
                     updatedCars =
                         updateCarsInLanes model.cars model.lanes
+
+                    updatedCars2 =
+                        generateLaneChanges updatedCars model.lanes
                 in
-                ( { model | cars = updatedCars }, Cmd.none )
+                ( { model | cars = updatedCars2 }, Cmd.none )
 
             else
                 ( model, Cmd.none )
 
         _ ->
             ( model, Cmd.none )
+
+
+generateLaneChanges cars lanes =
+    List.map (\c -> generateLaneChange c lanes) cars
+
+
+generateLaneChange car lanes =
+    let
+        lane =
+            getCurrentLane car lanes
+
+        other =
+            getOtherLane car lanes
+    in
+    case lane of
+        Just currentLane ->
+            case other of
+                Just otherLane ->
+                    let
+                        maneuver =
+                            constructLaneChange car currentLane otherLane
+                    in
+                    { car | maneuver = maneuver }
+
+                Nothing ->
+                    car
+
+        Nothing ->
+            car
+
+
+constructLaneChange car currentLane otherLane =
+    let
+        startXY =
+            ( car.centerX, car.centerY )
+
+        startCourse =
+            car.courseDeg
+
+        ( maybeEndXY, endCourse ) =
+            projectInLane car.distance 50.0 otherLane
+    in
+    case maybeEndXY of
+        Nothing ->
+            []
+
+        Just endXY ->
+            bezier startXY startCourse endXY endCourse 25.0
 
 
 updateCarsInLanes cars lanes =
@@ -228,6 +350,14 @@ getCurrentLane car lanes =
             List.filter (\lane -> car.laneID == lane.id) lanes
     in
     List.head current
+
+
+getOtherLane car lanes =
+    let
+        target =
+            List.filter (\lane -> not (car.laneID == lane.id)) lanes
+    in
+    List.head target
 
 
 updateCarInLane car lanes =
@@ -923,7 +1053,7 @@ view model =
             renderLanes2 model "blue"
 
         carEntities =
-            renderCars model
+            List.concat (renderCars model)
     in
     div []
         [ div []
@@ -1058,8 +1188,61 @@ renderCar car model =
                 , fillOpacity "0.5"
                 ]
                 []
+
+        maneuverPath =
+            constructManeuverPath car model
     in
-    entity
+    entity :: maneuverPath
+
+
+constructManeuverPath car model =
+    case car.maneuver of
+        [] ->
+            let
+                v1 =
+                    toViewCoords2 ( car.centerX, car.centerY ) model
+            in
+            [ circle
+                [ cx (Tuple.first v1)
+                , cy (Tuple.second v1)
+                , r "5"
+                , fill "#ff0000"
+                , fillOpacity "0.5"
+                ]
+                []
+            ]
+
+        segments ->
+            renderManeuverSegments segments model []
+
+
+renderManeuverSegments segmentsRemaining model resultsSoFar =
+    case segmentsRemaining of
+        [] ->
+            resultsSoFar
+
+        first :: rest ->
+            case rest of
+                next :: rest2 ->
+                    let
+                        entity =
+                            renderManeuverSegment ( first, next ) model
+                    in
+                    renderManeuverSegments (List.drop 1 segmentsRemaining) model (entity :: resultsSoFar)
+
+                [] ->
+                    resultsSoFar
+
+
+renderManeuverSegment segment model =
+    let
+        v1 =
+            toViewCoords2 (Tuple.first segment) model
+
+        v2 =
+            toViewCoords2 (Tuple.second segment) model
+    in
+    toSvgLineWithColor v1 v2 "red"
 
 
 toBoundaryPath points =
