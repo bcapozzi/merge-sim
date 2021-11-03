@@ -70,6 +70,8 @@ type alias Car =
     , widthFeet : Float
     , lengthFeet : Float
     , speedMph : Float
+    , laneID : String
+    , distance : Float
     }
 
 
@@ -115,7 +117,7 @@ init _ =
 
 
 initCars =
-    [ Car 107.5 100.0 0.0 10.0 20.0 10.0 ]
+    [ Car 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 ]
 
 
 initLanes centerline laneWidthFeet =
@@ -205,7 +207,7 @@ update msg model =
             if model.isRunning then
                 let
                     updatedCars =
-                        updateCars model.cars model.roadCenterline
+                        updateCarsInLanes model.cars model.lanes
                 in
                 ( { model | cars = updatedCars }, Cmd.none )
 
@@ -214,6 +216,117 @@ update msg model =
 
         _ ->
             ( model, Cmd.none )
+
+
+updateCarsInLanes cars lanes =
+    List.map (\c -> updateCarInLane c lanes) cars
+
+
+getCurrentLane car lanes =
+    let
+        current =
+            List.filter (\lane -> car.laneID == lane.id) lanes
+    in
+    List.head current
+
+
+updateCarInLane car lanes =
+    let
+        lane =
+            getCurrentLane car lanes
+    in
+    case lane of
+        Nothing ->
+            car
+
+        Just aLane ->
+            let
+                posnChange =
+                    car.speedMph * 3600.0 / 5280.0
+
+                ( updatedPosnXY, updatedCourseDeg ) =
+                    projectInLane car.distance posnChange aLane
+
+                updatedDistance =
+                    car.distance + posnChange
+            in
+            case updatedPosnXY of
+                Nothing ->
+                    car
+
+                Just aPosn ->
+                    { car
+                        | centerX = Tuple.first aPosn
+                        , centerY = Tuple.second aPosn
+                        , distance = updatedDistance
+                        , courseDeg = updatedCourseDeg
+                    }
+
+
+projectInLane fromDistance posnChange lane =
+    let
+        ( segment, distanceOnSegment ) =
+            findSegmentAtDistance (fromDistance + posnChange) lane
+    in
+    case segment of
+        Nothing ->
+            ( Nothing, 0 )
+
+        Just aLaneSegment ->
+            case aLaneSegment.segmentType of
+                ArcLane radiusFeet angleChangeDeg ->
+                    let
+                        ( centerXY, endXY ) =
+                            computeArcPoints aLaneSegment.startXY aLaneSegment.startCourseDeg angleChangeDeg radiusFeet
+
+                        directionFactor =
+                            getDirectionFactor angleChangeDeg
+
+                        theta =
+                            directionFactor * distanceOnSegment / radiusFeet
+
+                        courseToStartPoint =
+                            computeCourseDeg360 centerXY aLaneSegment.startXY
+
+                        courseToUpdatedPosn =
+                            courseToStartPoint + (180 / pi * theta)
+                    in
+                    ( Just (projectPoint centerXY courseToUpdatedPosn radiusFeet), aLaneSegment.startCourseDeg + 180.0 / pi * theta )
+
+                LinearLane ->
+                    ( Just (projectPoint aLaneSegment.startXY aLaneSegment.endCourseDeg distanceOnSegment), aLaneSegment.endCourseDeg )
+
+
+recursiveFindSegmentAtDistance : Float -> Float -> List LaneSegment -> ( Maybe LaneSegment, Float )
+recursiveFindSegmentAtDistance distanceAtStart targetDistance segmentsRemaining =
+    case segmentsRemaining of
+        [] ->
+            ( Nothing, 0.0 )
+
+        first :: rest ->
+            let
+                distanceAtEnd =
+                    distanceAtStart + computeLength first
+            in
+            if distanceAtEnd >= targetDistance then
+                ( Just first, targetDistance - distanceAtStart )
+
+            else
+                recursiveFindSegmentAtDistance distanceAtEnd targetDistance (List.drop 1 segmentsRemaining)
+
+
+computeLength segment =
+    case segment.segmentType of
+        ArcLane radiusFeet angleChangeDeg ->
+            radiusFeet * abs (degrees angleChangeDeg)
+
+        LinearLane ->
+            computeDistance (Just segment.startXY) (Just segment.endXY)
+
+
+findSegmentAtDistance : Float -> Lane -> ( Maybe LaneSegment, Float )
+findSegmentAtDistance distance lane =
+    recursiveFindSegmentAtDistance 0.0 distance lane.segments
 
 
 updateCars cars roadCenterline =
