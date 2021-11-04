@@ -1448,6 +1448,8 @@ view model =
             , button [ onClick Stop ] [ Html.text "Stop" ]
             ]
         , div []
+            [ Html.h2 [] [ Html.text ("Epoch: " ++ String.fromInt model.epoch) ] ]
+        , div []
             [ svg
                 [ width pxWidth
                 , height pxHeight
