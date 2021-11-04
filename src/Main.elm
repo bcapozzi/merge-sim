@@ -28,6 +28,7 @@ type alias Model =
     , isRunning : Bool
     , laneWidthFeet : Float
     , lanes : List Lane
+    , epoch : Int
     }
 
 
@@ -59,12 +60,15 @@ type alias LaneSegment =
     , startCourseDeg : Float
     , endXY : Point
     , endCourseDeg : Float
+    , laneID : String
     , segmentType : LaneSegmentType
     }
 
 
 type alias Car =
-    { centerX : Float
+    { id : String
+    , colorStr : String
+    , centerX : Float
     , centerY : Float
     , courseDeg : Float
     , widthFeet : Float
@@ -73,6 +77,7 @@ type alias Car =
     , laneID : String
     , distance : Float
     , maneuver : List ( Float, Float )
+    , maneuverDistance : Float
     }
 
 
@@ -184,11 +189,15 @@ init _ =
             initLanes centerline 15.0
     in
     --    ( Model 100.0 100.0 200.0 200.0 800 800 (RoadCenterline ( 100.0, 100.0 ) 0.0 [ Linear 500.0 0.0 ]) initCars False, Cmd.none )
-    ( Model 100.0 100.0 200.0 200.0 800 800 centerline cars False 15.0 lanes, Cmd.none )
+    ( Model 100.0 100.0 200.0 200.0 800 800 centerline cars False 15.0 lanes 0, Cmd.none )
 
 
 initCars =
-    [ Car 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 [], Car 92.5 110.0 0.0 10.0 20.0 12.0 "Left" 10.0 [] ]
+    [ Car "1" "gray" 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 [] 0.0, Car "2" "yellow" 92.5 110.0 0.0 10.0 20.0 12.0 "Left" 10.0 [] 0.0 ]
+
+
+
+--
 
 
 initLanes centerline laneWidthFeet =
@@ -203,15 +212,15 @@ initLanes centerline laneWidthFeet =
             centerline.originCourseDeg
 
         leftLaneSegments =
-            generateLaneSegments { startXY = originLeftXY, startCourseDeg = centerline.originCourseDeg } centerline.segments []
+            generateLaneSegments { startXY = originLeftXY, startCourseDeg = centerline.originCourseDeg } centerline.segments [] "Left"
 
         rightLaneSegments =
-            generateLaneSegments { startXY = originRightXY, startCourseDeg = centerline.originCourseDeg } centerline.segments []
+            generateLaneSegments { startXY = originRightXY, startCourseDeg = centerline.originCourseDeg } centerline.segments [] "Right"
     in
     [ Lane "Left" leftLaneSegments, Lane "Right" rightLaneSegments ]
 
 
-generateLaneSegments origin centerlineSegmentsRemaining laneSegmentsSoFar =
+generateLaneSegments origin centerlineSegmentsRemaining laneSegmentsSoFar laneID =
     case centerlineSegmentsRemaining of
         [] ->
             List.reverse laneSegmentsSoFar
@@ -219,9 +228,9 @@ generateLaneSegments origin centerlineSegmentsRemaining laneSegmentsSoFar =
         first :: rest ->
             let
                 laneSegment =
-                    generateLaneSegment first origin
+                    generateLaneSegment first origin laneID
             in
-            generateLaneSegments { startXY = laneSegment.endXY, startCourseDeg = laneSegment.endCourseDeg } rest (laneSegment :: laneSegmentsSoFar)
+            generateLaneSegments { startXY = laneSegment.endXY, startCourseDeg = laneSegment.endCourseDeg } rest (laneSegment :: laneSegmentsSoFar) laneID
 
 
 
@@ -229,17 +238,17 @@ generateLaneSegments origin centerlineSegmentsRemaining laneSegmentsSoFar =
 --[ ( 100.0, 0.0 ), ( 100.0, 1000.0 ), ( 100.0, 2000.0 ) ], Cmd.none )
 
 
-generateLaneSegment centerlineSegment origin =
+generateLaneSegment centerlineSegment origin laneID =
     let
         ( endXY, endCourseDeg ) =
             determineEndConditions centerlineSegment origin.startXY origin.startCourseDeg
     in
     case centerlineSegment of
         Linear lengthFeet courseDeg ->
-            LaneSegment origin.startXY origin.startCourseDeg endXY endCourseDeg LinearLane
+            LaneSegment origin.startXY origin.startCourseDeg endXY endCourseDeg laneID LinearLane
 
         Arc radiusFeet angleChangeDeg ->
-            LaneSegment origin.startXY origin.startCourseDeg endXY endCourseDeg (ArcLane radiusFeet angleChangeDeg)
+            LaneSegment origin.startXY origin.startCourseDeg endXY endCourseDeg laneID (ArcLane radiusFeet angleChangeDeg)
 
 
 rotateCars cars angleChangeDeg =
@@ -281,9 +290,14 @@ update msg model =
                         updateCarsInLanes model.cars model.lanes
 
                     updatedCars2 =
-                        generateLaneChanges updatedCars model.lanes
+                        generateLaneChanges updatedCars model.lanes model.epoch
                 in
-                ( { model | cars = updatedCars2 }, Cmd.none )
+                ( { model
+                    | cars = updatedCars2
+                    , epoch = model.epoch + 1
+                  }
+                , Cmd.none
+                )
 
             else
                 ( model, Cmd.none )
@@ -292,33 +306,37 @@ update msg model =
             ( model, Cmd.none )
 
 
-generateLaneChanges cars lanes =
-    List.map (\c -> generateLaneChange c lanes) cars
+generateLaneChanges cars lanes epoch =
+    List.map (\c -> generateLaneChange c lanes epoch) cars
 
 
-generateLaneChange car lanes =
-    let
-        lane =
-            getCurrentLane car lanes
+generateLaneChange car lanes epoch =
+    if epoch == 10 then
+        let
+            lane =
+                getCurrentLane car lanes
 
-        other =
-            getOtherLane car lanes
-    in
-    case lane of
-        Just currentLane ->
-            case other of
-                Just otherLane ->
-                    let
-                        maneuver =
-                            constructLaneChange car currentLane otherLane
-                    in
-                    { car | maneuver = maneuver }
+            other =
+                getOtherLane car lanes
+        in
+        case lane of
+            Just currentLane ->
+                case other of
+                    Just otherLane ->
+                        let
+                            maneuver =
+                                constructLaneChange car currentLane otherLane
+                        in
+                        { car | maneuver = maneuver }
 
-                Nothing ->
-                    car
+                    Nothing ->
+                        car
 
-        Nothing ->
-            car
+            Nothing ->
+                car
+
+    else
+        car
 
 
 constructLaneChange car currentLane otherLane =
@@ -361,36 +379,397 @@ getOtherLane car lanes =
 
 
 updateCarInLane car lanes =
-    let
-        lane =
-            getCurrentLane car lanes
-    in
-    case lane of
-        Nothing ->
-            car
-
-        Just aLane ->
+    case car.maneuver of
+        [] ->
             let
-                posnChange =
-                    car.speedMph * 3600.0 / 5280.0
-
-                ( updatedPosnXY, updatedCourseDeg ) =
-                    projectInLane car.distance posnChange aLane
-
-                updatedDistance =
-                    car.distance + posnChange
+                lane =
+                    getCurrentLane car lanes
             in
-            case updatedPosnXY of
+            case lane of
                 Nothing ->
                     car
 
-                Just aPosn ->
-                    { car
-                        | centerX = Tuple.first aPosn
-                        , centerY = Tuple.second aPosn
-                        , distance = updatedDistance
-                        , courseDeg = updatedCourseDeg
-                    }
+                Just aLane ->
+                    let
+                        posnChange =
+                            car.speedMph * 3600.0 / 5280.0
+
+                        ( updatedPosnXY, updatedCourseDeg ) =
+                            projectInLane car.distance posnChange aLane
+
+                        updatedDistance =
+                            car.distance + posnChange
+                    in
+                    case updatedPosnXY of
+                        Nothing ->
+                            car
+
+                        Just aPosn ->
+                            { car
+                                | centerX = Tuple.first aPosn
+                                , centerY = Tuple.second aPosn
+                                , distance = updatedDistance
+                                , courseDeg = updatedCourseDeg
+                            }
+
+        maneuverPoints ->
+            let
+                laneTarget =
+                    getOtherLane car lanes
+
+                maneuverSegments =
+                    toManeuverSegments maneuverPoints []
+            in
+            case laneTarget of
+                Nothing ->
+                    car
+
+                Just aLaneTarget ->
+                    let
+                        maneuverLength =
+                            computeManeuverLength maneuverSegments
+
+                        stepFeet =
+                            car.speedMph * 3600.0 / 5280.0
+                    in
+                    if (car.maneuverDistance + stepFeet) >= maneuverLength then
+                        let
+                            stepToUse =
+                                maneuverLength - car.maneuverDistance
+
+                            updatedPosn1 =
+                                getPosnOnManeuver maneuverSegments (car.maneuverDistance + stepToUse)
+
+                            ( updatedPosn, updatedDistanceOnLane, updatedCourse ) =
+                                projectOntoLane updatedPosn1 aLaneTarget
+
+                            -- take the rest of the step
+                            stepRemaining =
+                                car.maneuverDistance + stepFeet - maneuverLength
+
+                            ( updatedPosn2, updatedCourseDeg2 ) =
+                                projectInLane updatedDistanceOnLane stepRemaining aLaneTarget
+
+                            --                            updatedPosn2 =
+                            --                                projectPoint updatedPosn updatedCourse stepRemaining
+                            updatedDistanceOnLane2 =
+                                updatedDistanceOnLane + stepRemaining
+
+                            --updatedManeuverDistance =
+                            --    car.maneuverDistance + stepToUse
+                        in
+                        case updatedPosn2 of
+                            Nothing ->
+                                let
+                                    updatedPosn2b =
+                                        projectPoint updatedPosn updatedCourse stepRemaining
+
+                                    updatedCourseDeg2b =
+                                        updatedCourse
+                                in
+                                { car
+                                    | centerX = Tuple.first updatedPosn2b
+                                    , centerY = Tuple.second updatedPosn2b
+                                    , distance = updatedDistanceOnLane2
+                                    , courseDeg = updatedCourseDeg2b
+                                    , maneuverDistance = 0 --car.maneuverDistance + stepToUse
+                                    , laneID = aLaneTarget.id
+                                    , maneuver = []
+                                }
+
+                            Just updatedPosnXY ->
+                                { car
+                                    | centerX = Tuple.first updatedPosnXY
+                                    , centerY = Tuple.second updatedPosnXY
+                                    , distance = updatedDistanceOnLane2
+                                    , courseDeg = updatedCourseDeg2
+                                    , maneuverDistance = 0 --car.maneuverDistance + stepToUse
+                                    , laneID = aLaneTarget.id
+                                    , maneuver = []
+                                }
+
+                    else
+                        let
+                            courseOnManeuver =
+                                getCourseOnManeuver maneuverSegments (car.maneuverDistance + stepFeet)
+
+                            updatedPosn =
+                                getPosnOnManeuver maneuverSegments (car.maneuverDistance + stepFeet)
+
+                            updatedManeuverDistance =
+                                car.maneuverDistance + stepFeet
+
+                            updatedManeuver =
+                                car.maneuver
+                        in
+                        { car
+                            | centerX = Tuple.first updatedPosn
+                            , centerY = Tuple.second updatedPosn
+                            , courseDeg = courseOnManeuver
+                            , maneuverDistance = car.maneuverDistance + stepFeet
+                        }
+
+
+toManeuverSegments pointsRemaining resultsSoFar =
+    case pointsRemaining of
+        [] ->
+            List.reverse resultsSoFar
+
+        first :: rest ->
+            case rest of
+                next :: rest2 ->
+                    toManeuverSegments (List.drop 1 pointsRemaining) (( first, next ) :: resultsSoFar)
+
+                [] ->
+                    List.reverse resultsSoFar
+
+
+projectOntoLane posn lane =
+    let
+        maybeContainingSegment =
+            findSegmentContaining posn lane
+    in
+    case maybeContainingSegment of
+        Nothing ->
+            ( ( 0.0, 0.0 ), 0.0, 0.0 )
+
+        Just containingSegment ->
+            ( containingSegment.posnOnSegmentXY, containingSegment.distanceOnLane, containingSegment.courseOnSegmentDeg )
+
+
+projectOntoLaneSegment : LaneSegment -> ( Float, Float ) -> ( ( Float, Float ), Float )
+projectOntoLaneSegment segment posn =
+    case segment.segmentType of
+        LinearLane ->
+            let
+                dToPoint =
+                    computeDistance (Just segment.startXY) (Just posn)
+
+                courseToPoint =
+                    computeCourseDeg360 segment.startXY posn
+
+                relativeCourse =
+                    courseToPoint - segment.endCourseDeg
+
+                projectedDistance =
+                    dToPoint * cos (degrees relativeCourse)
+
+                dx =
+                    projectedDistance * sin (degrees segment.endCourseDeg)
+
+                dy =
+                    projectedDistance * cos (degrees segment.endCourseDeg)
+
+                projectedPosn =
+                    ( Tuple.first segment.startXY + dx, Tuple.second segment.startXY + dy )
+            in
+            ( projectedPosn, segment.endCourseDeg )
+
+        ArcLane radiusFeet angleChangeDeg ->
+            let
+                ( centerXY, endXY ) =
+                    computeArcPoints segment.startXY segment.startCourseDeg angleChangeDeg radiusFeet
+
+                courseToPoint =
+                    computeCourseDeg360 centerXY posn
+
+                pointOnArc =
+                    projectPoint centerXY courseToPoint radiusFeet
+
+                courseToStart =
+                    computeCourseDeg360 centerXY segment.startXY
+
+                theta =
+                    courseToPoint - courseToStart
+
+                courseAtPoint =
+                    segment.startCourseDeg + theta
+            in
+            ( pointOnArc, courseAtPoint )
+
+
+recursiveFindSegmentContaining posn segmentsRemaining distanceSoFar resultsSoFar =
+    case segmentsRemaining of
+        [] ->
+            resultsSoFar
+
+        first :: rest ->
+            if laneSegmentContains first posn then
+                let
+                    ( posnXY, courseDeg ) =
+                        projectOntoLaneSegment first posn
+
+                    d =
+                        computeDistance (Just first.startXY) (Just posnXY)
+
+                    result =
+                        { segment = first, posnOnSegmentXY = posnXY, courseOnSegmentDeg = courseDeg, distanceOnLane = distanceSoFar + d }
+                in
+                recursiveFindSegmentContaining posn (List.drop 1 segmentsRemaining) (distanceSoFar + d) (result :: resultsSoFar)
+
+            else
+                let
+                    d =
+                        computeLength first
+                in
+                recursiveFindSegmentContaining posn (List.drop 1 segmentsRemaining) (distanceSoFar + d) resultsSoFar
+
+
+findSegmentContaining posn lane =
+    let
+        contains =
+            recursiveFindSegmentContaining posn lane.segments 0.0 []
+    in
+    List.head contains
+
+
+laneSegmentContains segment posn =
+    case segment.segmentType of
+        LinearLane ->
+            let
+                distanceToPoint =
+                    computeDistance (Just segment.startXY) (Just posn)
+
+                courseToPoint =
+                    180.0 / pi * computeCourse (Just segment.startXY) (Just posn)
+
+                relativeCourse =
+                    segment.endCourseDeg - courseToPoint
+
+                distanceOnSegment =
+                    distanceToPoint * cos (degrees relativeCourse)
+
+                segmentLength =
+                    computeLength segment
+            in
+            distanceOnSegment >= 0 && distanceOnSegment <= segmentLength
+
+        ArcLane radiusFeet angleChangeDeg ->
+            let
+                ( centerXY, endXY ) =
+                    computeArcPoints segment.startXY segment.startCourseDeg angleChangeDeg radiusFeet
+
+                r1 =
+                    radiusFeet - 25.0
+
+                r2 =
+                    radiusFeet + 25.0
+
+                distanceFromOrigin =
+                    computeDistance (Just centerXY) (Just posn)
+
+                courseToPointDeg =
+                    computeCourseDeg360 centerXY posn
+
+                course1 =
+                    computeCourseDeg360 centerXY segment.startXY
+
+                course2 =
+                    computeCourseDeg360 centerXY endXY
+            in
+            withinDistance r1 r2 distanceFromOrigin && withinAzimuth (limit360 course1) (limit360 course2) courseToPointDeg
+
+
+getPosnOnManeuver maneuver distance =
+    let
+        ( maybeSegment, courseDeg, distanceOnSegment ) =
+            recursiveFindManeuverSegmentAtDistance 0.0 distance maneuver
+    in
+    case maybeSegment of
+        Nothing ->
+            ( 0.0, 0.0 )
+
+        Just aSegment ->
+            projectPoint (Tuple.first aSegment) courseDeg distanceOnSegment
+
+
+getCourseOnManeuver maneuver distance =
+    let
+        ( maybeSegment, courseOnSegment, distanceOnSegment ) =
+            recursiveFindManeuverSegmentAtDistance 0.0 distance maneuver
+    in
+    case maybeSegment of
+        Nothing ->
+            0.0
+
+        Just aSegment ->
+            let
+                from =
+                    Tuple.first aSegment
+
+                to =
+                    Tuple.second aSegment
+
+                courseDeg =
+                    computeCourseDeg360 from to
+            in
+            courseDeg
+
+
+recursiveFindManeuverSegmentAtDistance distanceAtStart targetDistance segmentsRemaining =
+    case segmentsRemaining of
+        [] ->
+            ( Nothing, 0.0, 0.0 )
+
+        first :: rest ->
+            let
+                distanceAtEnd =
+                    distanceAtStart + computeManeuverSegmentLength first
+
+                courseOnSegment =
+                    computeCourse (Just (Tuple.first first)) (Just (Tuple.second first))
+            in
+            if distanceAtEnd >= targetDistance then
+                ( Just first, courseOnSegment, targetDistance - distanceAtStart )
+
+            else
+                recursiveFindManeuverSegmentAtDistance distanceAtEnd targetDistance (List.drop 1 segmentsRemaining)
+
+
+computeManeuverSegmentLength maneuverSegment =
+    let
+        from =
+            Tuple.first maneuverSegment
+
+        to =
+            Tuple.second maneuverSegment
+
+        dx =
+            Tuple.first to - Tuple.first from
+
+        dy =
+            Tuple.second to - Tuple.second from
+    in
+    sqrt (dx * dx + dy * dy)
+
+
+computeManeuverLength segments =
+    recursiveComputeManeuverLength segments 0.0
+
+
+recursiveComputeManeuverLength segmentsRemaining distanceSoFar =
+    case segmentsRemaining of
+        [] ->
+            distanceSoFar
+
+        first :: rest ->
+            let
+                from =
+                    Tuple.first first
+
+                to =
+                    Tuple.second first
+
+                dx =
+                    Tuple.first to - Tuple.first from
+
+                dy =
+                    Tuple.second to - Tuple.second from
+
+                dd =
+                    sqrt (dx * dx + dy * dy)
+            in
+            recursiveComputeManeuverLength (List.drop 1 segmentsRemaining) (distanceSoFar + dd)
 
 
 projectInLane fromDistance posnChange lane =
@@ -1170,6 +1549,18 @@ getUpperLeftCorner car =
 
 renderCar car model =
     let
+        _ =
+            Debug.log "EPOCH" model.epoch
+
+        _ =
+            Debug.log "Car" car.id
+
+        _ =
+            Debug.log "Posn" ( car.centerX, car.centerY )
+
+        _ =
+            Debug.log "Lane" car.laneID
+
         carBoundaryPointsXY =
             toRectangleXY car
 
@@ -1182,8 +1573,8 @@ renderCar car model =
         entity =
             Svg.path
                 [ d (String.join " " carBoundaryPath)
-                , stroke "gray"
-                , fill "gray"
+                , stroke car.colorStr
+                , fill car.colorStr
                 , strokeWidth "2"
                 , fillOpacity "0.5"
                 ]
