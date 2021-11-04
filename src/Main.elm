@@ -78,6 +78,8 @@ type alias Car =
     , distance : Float
     , maneuver : List ( Float, Float )
     , maneuverDistance : Float
+    , maneuverTargetXY : Maybe ( Float, Float )
+    , maneuverTargetCourseDeg : Float
     }
 
 
@@ -193,7 +195,9 @@ init _ =
 
 
 initCars =
-    [ Car "1" "gray" 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 [] 0.0, Car "2" "yellow" 92.5 110.0 0.0 10.0 20.0 12.0 "Left" 10.0 [] 0.0 ]
+    [ Car "1" "gray" 107.5 100.0 0.0 10.0 20.0 10.0 "Right" 0.0 [] 0.0 Nothing 0.0
+    , Car "2" "yellow" 92.5 110.0 0.0 10.0 20.0 12.0 "Left" 10.0 [] 0.0 Nothing 0.0
+    ]
 
 
 
@@ -324,10 +328,10 @@ generateLaneChange car lanes epoch =
                 case other of
                     Just otherLane ->
                         let
-                            maneuver =
+                            ( maneuver, targetXY, targetCourse ) =
                                 constructLaneChange car currentLane otherLane
                         in
-                        { car | maneuver = maneuver }
+                        { car | maneuver = maneuver, maneuverTargetXY = Just targetXY, maneuverTargetCourseDeg = targetCourse }
 
                     Nothing ->
                         car
@@ -352,10 +356,10 @@ constructLaneChange car currentLane otherLane =
     in
     case maybeEndXY of
         Nothing ->
-            []
+            ( [], ( 0.0, 0.0 ), 0.0 )
 
         Just endXY ->
-            bezier startXY startCourse endXY endCourse 25.0
+            ( bezier startXY startCourse endXY endCourse 25.0, endXY, endCourse )
 
 
 updateCarsInLanes cars lanes =
@@ -475,6 +479,8 @@ updateCarInLane car lanes =
                                     , maneuverDistance = 0 --car.maneuverDistance + stepToUse
                                     , laneID = aLaneTarget.id
                                     , maneuver = []
+                                    , maneuverTargetXY = Nothing
+                                    , maneuverTargetCourseDeg = 0.0
                                 }
 
                             Just updatedPosnXY ->
@@ -486,6 +492,8 @@ updateCarInLane car lanes =
                                     , maneuverDistance = 0 --car.maneuverDistance + stepToUse
                                     , laneID = aLaneTarget.id
                                     , maneuver = []
+                                    , maneuverTargetXY = Nothing
+                                    , maneuverTargetCourseDeg = 0.0
                                 }
 
                     else
@@ -1583,7 +1591,33 @@ renderCar car model =
         maneuverPath =
             constructManeuverPath car model
     in
-    entity :: maneuverPath
+    case car.maneuverTargetXY of
+        Nothing ->
+            entity :: maneuverPath
+
+        Just ( x, y ) ->
+            let
+                targetBoundaryPointsXY =
+                    toRectangleXY { centerX = x, centerY = y, courseDeg = car.maneuverTargetCourseDeg, widthFeet = car.widthFeet, lengthFeet = car.lengthFeet }
+
+                targetBoundaryPointsPixels =
+                    List.map (\p -> toViewCoords2 p model) targetBoundaryPointsXY
+
+                targetBoundaryPath =
+                    toBoundaryPath targetBoundaryPointsPixels
+
+                targetEntity =
+                    Svg.path
+                        [ d (String.join " " targetBoundaryPath)
+                        , stroke car.colorStr
+                        , fill car.colorStr
+                        , strokeWidth "2"
+                        , fillOpacity "0.1"
+                        , strokeDasharray "4"
+                        ]
+                        []
+            in
+            entity :: (targetEntity :: maneuverPath)
 
 
 constructManeuverPath car model =
